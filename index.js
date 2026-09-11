@@ -1,39 +1,18 @@
 require('dotenv').config();
-const fs = require('fs');
-const path = require('path');
 const { Client, GatewayIntentBits } = require('discord.js');
 const {
   joinVoiceChannel,
-  createAudioPlayer,
-  createAudioResource,
-  AudioPlayerStatus,
   VoiceConnectionStatus,
   entersState,
-  NoSubscriberBehavior,
-  StreamType,
 } = require('@discordjs/voice');
-const ffmpegPath = require('ffmpeg-static');
-process.env.FFMPEG_PATH = ffmpegPath;
-const play = require('play-dl');
 
-const {
-  DISCORD_TOKEN,
-  GUILD_ID,
-  VOICE_CHANNEL_ID,
-  MODE = 'local',
-  STREAM_URL,
-  YOUTUBE_URLS,
-  VOLUME = '0.5',
-} = process.env;
+const { DISCORD_TOKEN, GUILD_ID, VOICE_CHANNEL_ID } = process.env;
 
 if (!DISCORD_TOKEN || !GUILD_ID || !VOICE_CHANNEL_ID) {
   console.error('❌ DISCORD_TOKEN, GUILD_ID, dan VOICE_CHANNEL_ID wajib diisi di file .env');
   process.exit(1);
 }
 
-const MUSIC_DIR = path.join(__dirname, 'music');
-
-// -------- Client Discord --------
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -41,138 +20,6 @@ const client = new Client({
   ],
 });
 
-// -------- Audio Player --------
-// NoSubscriberBehavior.Play -> tetap "memutar" walau tidak ada yang subscribe/dengar,
-// supaya bot tetap standby dan tidak berhenti sendiri saat channel kosong.
-const player = createAudioPlayer({
-  behaviors: {
-    noSubscriber: NoSubscriberBehavior.Play,
-  },
-});
-
-let currentConnection = null;
-let playlist = [];
-let currentIndex = -1;
-
-function loadPlaylist() {
-  if (!fs.existsSync(MUSIC_DIR)) {
-    fs.mkdirSync(MUSIC_DIR, { recursive: true });
-  }
-  playlist = fs
-    .readdirSync(MUSIC_DIR)
-    .filter((f) => /\.(mp3|ogg|wav|flac|m4a)$/i.test(f))
-    .map((f) => path.join(MUSIC_DIR, f));
-}
-
-function pickNextTrack() {
-  if (playlist.length === 0) return null;
-  if (playlist.length === 1) return playlist[0];
-  let idx;
-  do {
-    idx = Math.floor(Math.random() * playlist.length);
-  } while (idx === currentIndex);
-  currentIndex = idx;
-  return playlist[idx];
-}
-
-function playLocalNext() {
-  const track = pickNextTrack();
-  if (!track) {
-    console.warn('⚠️  Tidak ada file audio di folder ./music. Tambahkan file .mp3 lalu restart bot.');
-    return;
-  }
-  console.log(`🎵 Memutar: ${path.basename(track)}`);
-  const resource = createAudioResource(track, {
-    inlineVolume: true,
-  });
-  resource.volume?.setVolume(parseFloat(VOLUME));
-  player.play(resource);
-}
-
-function playStream() {
-  if (!STREAM_URL) {
-    console.error('❌ MODE=stream tapi STREAM_URL belum diisi di .env');
-    return;
-  }
-  console.log(`📡 Menyambung ke stream: ${STREAM_URL}`);
-  const resource = createAudioResource(STREAM_URL, {
-    inputType: StreamType.Arbitrary,
-    inlineVolume: true,
-  });
-  resource.volume?.setVolume(parseFloat(VOLUME));
-  player.play(resource);
-}
-
-let youtubeList = [];
-let youtubeIndex = -1;
-
-function loadYoutubeList() {
-  youtubeList = (YOUTUBE_URLS || '')
-    .split(',')
-    .map((u) => u.trim())
-    .filter(Boolean);
-}
-
-function pickNextYoutubeUrl() {
-  if (youtubeList.length === 0) return null;
-  if (youtubeList.length === 1) return youtubeList[0];
-  let idx;
-  do {
-    idx = Math.floor(Math.random() * youtubeList.length);
-  } while (idx === youtubeIndex);
-  youtubeIndex = idx;
-  return youtubeList[idx];
-}
-
-async function playYoutube() {
-  const url = pickNextYoutubeUrl();
-  if (!url) {
-    console.error('❌ MODE=youtube tapi YOUTUBE_URLS belum diisi di .env');
-    return;
-  }
-  try {
-    console.log(`▶️  Menyambung ke YouTube: ${url}`);
-    // validate & get stream. play-dl otomatis handle video biasa maupun live stream.
-    const info = await play.video_basic_info(url);
-    const streamInfo = await play.stream(url, { discordPlayerCompatibility: true });
-    const resource = createAudioResource(streamInfo.stream, {
-      inputType: streamInfo.type,
-      inlineVolume: true,
-    });
-    resource.volume?.setVolume(parseFloat(VOLUME));
-    player.play(resource);
-    console.log(`🎬 Sekarang memutar: ${info.video_details.title}`);
-  } catch (err) {
-    console.error('⚠️  Gagal memutar dari YouTube:', err.message);
-    // coba lagi dengan link berikutnya setelah jeda singkat
-    setTimeout(playNext, 3000);
-  }
-}
-
-function playNext() {
-  if (MODE === 'silent') {
-    // Mode diam: tidak memutar audio apa pun, cukup standby di voice channel.
-    return;
-  } else if (MODE === 'youtube') {
-    playYoutube();
-  } else if (MODE === 'stream') {
-    playStream();
-  } else {
-    playLocalNext();
-  }
-}
-
-// Saat trek selesai -> otomatis putar lagi (loop tanpa henti)
-player.on(AudioPlayerStatus.Idle, () => {
-  playNext();
-});
-
-player.on('error', (error) => {
-  console.error('⚠️  Player error, mencoba lanjut ke trek berikutnya:', error.message);
-  setTimeout(playNext, 2000);
-});
-
-// -------- Voice Connection & Auto-Reconnect --------
 async function connectToVoice() {
   const guild = await client.guilds.fetch(GUILD_ID);
   const channel = await guild.channels.fetch(VOICE_CHANNEL_ID);
@@ -186,14 +33,12 @@ async function connectToVoice() {
     channelId: channel.id,
     guildId: guild.id,
     adapterCreator: guild.voiceAdapterCreator,
-    selfDeaf: false, // biar tidak auto-deaf (opsional, bisa diubah ke true)
+    selfDeaf: false,
     selfMute: false,
   });
 
-  currentConnection = connection;
-  if (MODE !== 'silent') {
-    connection.subscribe(player);
-  }
+  // Bot tidak memutar audio apa pun -> otomatis tetap "diam" dan standby
+  // di voice channel selama koneksi tidak diputus.
 
   connection.on(VoiceConnectionStatus.Disconnected, async () => {
     console.warn('🔌 Koneksi voice terputus, mencoba reconnect...');
@@ -202,9 +47,8 @@ async function connectToVoice() {
         entersState(connection, VoiceConnectionStatus.Signalling, 5000),
         entersState(connection, VoiceConnectionStatus.Connecting, 5000),
       ]);
-      // Kemungkinan reconnect otomatis oleh discord.js, biarkan berjalan
+      // Reconnect otomatis berhasil, biarkan berjalan
     } catch (err) {
-      // Reconnect otomatis gagal -> hancurkan koneksi lama dan join ulang manual
       console.warn('🔁 Reconnect otomatis gagal, join ulang secara manual...');
       try {
         connection.destroy();
@@ -222,18 +66,11 @@ async function connectToVoice() {
     console.error('⚠️  Voice connection error:', err.message);
   });
 
-  console.log(`✅ Berhasil join voice channel: ${channel.name}${MODE === 'silent' ? ' (mode diam / silent)' : ''}`);
-
-  if (MODE !== 'silent' && player.state.status !== AudioPlayerStatus.Playing) {
-    playNext();
-  }
+  console.log(`✅ Berhasil join voice channel: ${channel.name} (standby diam)`);
 }
 
-// -------- Ready --------
 client.once('ready', async () => {
   console.log(`🤖 Login sebagai ${client.user.tag}`);
-  loadPlaylist();
-  loadYoutubeList();
   await connectToVoice();
 });
 
