@@ -14,6 +14,7 @@ const {
 } = require('@discordjs/voice');
 const ffmpegPath = require('ffmpeg-static');
 process.env.FFMPEG_PATH = ffmpegPath;
+const play = require('play-dl');
 
 const {
   DISCORD_TOKEN,
@@ -21,6 +22,7 @@ const {
   VOICE_CHANNEL_ID,
   MODE = 'local',
   STREAM_URL,
+  YOUTUBE_URLS,
   VOLUME = '0.5',
 } = process.env;
 
@@ -101,8 +103,59 @@ function playStream() {
   player.play(resource);
 }
 
+let youtubeList = [];
+let youtubeIndex = -1;
+
+function loadYoutubeList() {
+  youtubeList = (YOUTUBE_URLS || '')
+    .split(',')
+    .map((u) => u.trim())
+    .filter(Boolean);
+}
+
+function pickNextYoutubeUrl() {
+  if (youtubeList.length === 0) return null;
+  if (youtubeList.length === 1) return youtubeList[0];
+  let idx;
+  do {
+    idx = Math.floor(Math.random() * youtubeList.length);
+  } while (idx === youtubeIndex);
+  youtubeIndex = idx;
+  return youtubeList[idx];
+}
+
+async function playYoutube() {
+  const url = pickNextYoutubeUrl();
+  if (!url) {
+    console.error('❌ MODE=youtube tapi YOUTUBE_URLS belum diisi di .env');
+    return;
+  }
+  try {
+    console.log(`▶️  Menyambung ke YouTube: ${url}`);
+    // validate & get stream. play-dl otomatis handle video biasa maupun live stream.
+    const info = await play.video_basic_info(url);
+    const streamInfo = await play.stream(url, { discordPlayerCompatibility: true });
+    const resource = createAudioResource(streamInfo.stream, {
+      inputType: streamInfo.type,
+      inlineVolume: true,
+    });
+    resource.volume?.setVolume(parseFloat(VOLUME));
+    player.play(resource);
+    console.log(`🎬 Sekarang memutar: ${info.video_details.title}`);
+  } catch (err) {
+    console.error('⚠️  Gagal memutar dari YouTube:', err.message);
+    // coba lagi dengan link berikutnya setelah jeda singkat
+    setTimeout(playNext, 3000);
+  }
+}
+
 function playNext() {
-  if (MODE === 'stream') {
+  if (MODE === 'silent') {
+    // Mode diam: tidak memutar audio apa pun, cukup standby di voice channel.
+    return;
+  } else if (MODE === 'youtube') {
+    playYoutube();
+  } else if (MODE === 'stream') {
     playStream();
   } else {
     playLocalNext();
@@ -138,7 +191,9 @@ async function connectToVoice() {
   });
 
   currentConnection = connection;
-  connection.subscribe(player);
+  if (MODE !== 'silent') {
+    connection.subscribe(player);
+  }
 
   connection.on(VoiceConnectionStatus.Disconnected, async () => {
     console.warn('🔌 Koneksi voice terputus, mencoba reconnect...');
@@ -167,9 +222,9 @@ async function connectToVoice() {
     console.error('⚠️  Voice connection error:', err.message);
   });
 
-  console.log(`✅ Berhasil join voice channel: ${channel.name}`);
+  console.log(`✅ Berhasil join voice channel: ${channel.name}${MODE === 'silent' ? ' (mode diam / silent)' : ''}`);
 
-  if (player.state.status !== AudioPlayerStatus.Playing) {
+  if (MODE !== 'silent' && player.state.status !== AudioPlayerStatus.Playing) {
     playNext();
   }
 }
@@ -178,6 +233,7 @@ async function connectToVoice() {
 client.once('ready', async () => {
   console.log(`🤖 Login sebagai ${client.user.tag}`);
   loadPlaylist();
+  loadYoutubeList();
   await connectToVoice();
 });
 
