@@ -25,6 +25,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMessages, // untuk sticky panel (tidak perlu Message Content)
   ],
   rest: {
     // Rename channel dibatasi Discord (2x / 10 menit). Daripada request
