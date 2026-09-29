@@ -85,20 +85,9 @@ function isStaff(member) {
   );
 }
 
-function countOverwrites(channel, type) {
-  // type: 'allow' (diizinkan) | 'deny' (diblokir)
-  return channel.permissionOverwrites.cache.filter(
-    (ow) =>
-      ow.type === OverwriteType.Member &&
-      ow.id !== channel.client.user.id &&
-      ow[type].has(PermissionFlagsBits.Connect),
-  ).size;
-}
-
 // ---------- Tampilan panel ----------
 async function buildPanel(channel) {
   const locked = isLocked(channel);
-  const humans = channel.members.filter((m) => !m.user.bot).size;
   const ownerId = getOwnerId();
   const owner = ownerId ? await channel.client.users.fetch(ownerId).catch(() => null) : null;
   const code = (v) => `\`${String(v).replace(/`/g, "'")}\``;
@@ -111,14 +100,9 @@ async function buildPanel(channel) {
         '_Hanya owner 👑 dan staff yang bisa memakai panel ini._',
     )
     .addFields(
-      // Baris 1
       { name: '📛 Nama', value: code(channel.name), inline: true },
       { name: '👑 Owner', value: code(owner ? owner.username : ownerId || '-'), inline: true },
       { name: '🔐 Status', value: code(locked ? 'Terkunci' : 'Terbuka'), inline: true },
-      // Baris 2
-      { name: '👥 Member', value: code(humans), inline: true },
-      { name: '✅ Diizinkan', value: code(countOverwrites(channel, 'allow')), inline: true },
-      { name: '⛔ Diblokir', value: code(countOverwrites(channel, 'deny')), inline: true },
     )
     .setFooter({ text: 'Lofi Radio • Voice Panel' })
     .setTimestamp();
