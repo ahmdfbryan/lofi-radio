@@ -251,6 +251,33 @@ async function sendPanel(client, targetChannel) {
 }
 
 // Saat bot start: pakai panel yang sudah ada, atau kirim baru
+// ---------- Sticky: panel selalu jadi pesan paling bawah ----------
+const STICKY_DELAY_MS = 3000; // tunggu chat "tenang" 3 detik sebelum kirim ulang
+let stickyTimer = null;
+let stickyBusy = false;
+
+function scheduleSticky(client) {
+  clearTimeout(stickyTimer);
+  stickyTimer = setTimeout(() => repostSticky(client), STICKY_DELAY_MS);
+}
+
+async function repostSticky(client) {
+  if (stickyBusy) return scheduleSticky(client);
+  stickyBusy = true;
+  try {
+    const data = loadData();
+    if (!data.channelId) return;
+    const ch = await client.channels.fetch(data.channelId);
+    const last = (await ch.messages.fetch({ limit: 1 })).first();
+    if (last && last.id === data.messageId) return; // sudah paling bawah
+    await sendPanel(client, ch); // hapus panel lama + kirim baru di bawah
+  } catch (err) {
+    console.warn('⚠️  Gagal sticky panel:', err.message);
+  } finally {
+    stickyBusy = false;
+  }
+}
+
 async function ensurePanel(client) {
   const data = loadData();
   const targetId = cfg.panelChannelId;
@@ -261,6 +288,7 @@ async function ensurePanel(client) {
       await ch.messages.fetch(data.messageId);
       await refreshPanel(client);
       console.log('🎛️  Panel voice sudah ada, diperbarui.');
+      await repostSticky(client); // pastikan panel tetap pesan paling bawah
       return;
     } catch (_) {
       // pesan sudah dihapus -> kirim ulang
@@ -487,6 +515,13 @@ function setupPanel(client, options) {
     if (oldState.channelId === cfg.voiceChannelId || newState.channelId === cfg.voiceChannelId) {
       scheduleRefresh(client, 5000);
     }
+  });
+
+  // Sticky: ada pesan baru di channel panel -> panel dikirim ulang ke bawah
+  client.on('messageCreate', (msg) => {
+    if (msg.author.id === client.user.id) return;
+    if (msg.channelId !== loadData().channelId) return;
+    scheduleSticky(client);
   });
 
   // Update panel kalau admin mengubah channel langsung dari Discord
