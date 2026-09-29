@@ -5,8 +5,16 @@ const {
   VoiceConnectionStatus,
   entersState,
 } = require('@discordjs/voice');
+const { setupPanel } = require('./panel');
 
-const { DISCORD_TOKEN, GUILD_ID, VOICE_CHANNEL_ID } = process.env;
+const {
+  DISCORD_TOKEN,
+  GUILD_ID,
+  VOICE_CHANNEL_ID,
+  PANEL_CHANNEL_ID,
+  PANEL_ROLE_ID,
+  PANEL_REQUIRE_IN_VOICE,
+} = process.env;
 
 if (!DISCORD_TOKEN || !GUILD_ID || !VOICE_CHANNEL_ID) {
   console.error('❌ DISCORD_TOKEN, GUILD_ID, dan VOICE_CHANNEL_ID wajib diisi di file .env');
@@ -18,7 +26,36 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildVoiceStates,
   ],
+  rest: {
+    // Rename channel dibatasi Discord (2x / 10 menit). Daripada request
+    // "menggantung" sampai 10 menit, langsung lempar error supaya panel
+    // bisa memberi tahu member kapan boleh rename lagi.
+    rejectOnRateLimit: (data) => data.method === 'PATCH' && data.route.startsWith('/channels'),
+  },
 });
+
+// ===== Voice Control Panel (Rename, Manage Users, Lock, Unlock) =====
+setupPanel(client, {
+  guildId: GUILD_ID,
+  voiceChannelId: VOICE_CHANNEL_ID,
+  // Default: panel dikirim ke text chat bawaan voice channel itu sendiri
+  panelChannelId: PANEL_CHANNEL_ID || VOICE_CHANNEL_ID,
+  panelRoleId: PANEL_ROLE_ID || null,
+  requireInVoice: (PANEL_REQUIRE_IN_VOICE || 'true').toLowerCase() !== 'false',
+});
+
+let reconnectTimer = null;
+function scheduleReconnect(delay = 5000) {
+  // Cegah join dobel kalau event Disconnected & Destroyed muncul bersamaan
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectToVoice().catch((err) => {
+      console.error('⚠️  Gagal join voice:', err.message);
+      scheduleReconnect(15000);
+    });
+  }, delay);
+}
 
 async function connectToVoice() {
   const guild = await client.guilds.fetch(GUILD_ID);
@@ -51,15 +88,16 @@ async function connectToVoice() {
     } catch (err) {
       console.warn('🔁 Reconnect otomatis gagal, join ulang secara manual...');
       try {
-        connection.destroy();
-      } catch (_) {}
-      setTimeout(connectToVoice, 5000);
+        connection.destroy(); // -> memicu event Destroyed di bawah
+      } catch (_) {
+        scheduleReconnect();
+      }
     }
   });
 
   connection.on(VoiceConnectionStatus.Destroyed, () => {
     console.warn('💥 Koneksi voice dihancurkan, join ulang dalam 5 detik...');
-    setTimeout(connectToVoice, 5000);
+    scheduleReconnect();
   });
 
   connection.on('error', (err) => {
