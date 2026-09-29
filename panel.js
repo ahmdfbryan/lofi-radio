@@ -106,6 +106,10 @@ async function buildPanel(channel) {
   const embed = new EmbedBuilder()
     .setColor(locked ? 0xed4245 : 0x57f287)
     .setTitle('🎛️ Voice Control Panel')
+    .setDescription(
+      `Kelola voice <#${channel.id}> lewat tombol di bawah.\n` +
+        '_Hanya owner 👑 dan staff yang bisa memakai panel ini._',
+    )
     .addFields(
       // Baris 1
       { name: '📛 Nama', value: code(channel.name), inline: true },
@@ -115,7 +119,9 @@ async function buildPanel(channel) {
       { name: '👥 Member', value: code(humans), inline: true },
       { name: '✅ Diizinkan', value: code(countOverwrites(channel, 'allow')), inline: true },
       { name: '⛔ Diblokir', value: code(countOverwrites(channel, 'deny')), inline: true },
-    );
+    )
+    .setFooter({ text: 'Lofi Radio • Voice Panel' })
+    .setTimestamp();
 
   const btn = (id, label, emoji, style, disabled = false) =>
     new ButtonBuilder().setCustomId(id).setLabel(label).setEmoji(emoji).setStyle(style).setDisabled(disabled);
@@ -137,7 +143,7 @@ function buildTransferMenu() {
   return {
     content:
       '**👑 Transfer Owner**\nPilih member yang akan jadi owner baru. ' +
-      '**Setelah dipindah, kamu tidak bisa memakai panel lagi.**',
+      '**Owner lama tidak bisa memakai panel lagi** (kecuali staff).',
     components: [
       new ActionRowBuilder().addComponents(
         new UserSelectMenuBuilder()
@@ -296,10 +302,13 @@ async function ensurePanel(client) {
 
 // ---------- Cek hak akses pemakai panel ----------
 function checkAccess(interaction) {
+  // Staff server (Administrator / Manage Channels) selalu bisa memakai panel
+  if (interaction.member && isStaff(interaction.member)) return null;
+
   const owner = getOwnerId();
+  if (owner && interaction.user.id === owner) return null;
   if (!owner) return '❌ Owner panel belum diatur. Isi `PANEL_OWNER_ID` di file .env bot.';
-  if (interaction.user.id === owner) return null;
-  return `❌ Hanya owner (<@${owner}>) yang bisa memakai panel ini.`;
+  return `❌ Hanya owner (<@${owner}>) atau staff yang bisa memakai panel ini.`;
 }
 
 function reasonOf(interaction, action) {
