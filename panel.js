@@ -31,6 +31,23 @@ const renameHistory = [];
 let cfg = {};
 let refreshTimer = null;
 
+// Owner panel = 1 user ID. Awalnya dari .env PANEL_OWNER_ID, bisa dipindah
+// lewat tombol Transfer Owner (disimpan di data/panel.json).
+// Kalau PANEL_OWNER_ID di .env diganti, owner ikut di-reset ke ID baru itu.
+function envOwnerId() {
+  return (process.env.PANEL_OWNER_ID || '').trim();
+}
+function getOwnerId() {
+  const env = envOwnerId();
+  const d = loadData();
+  if (d.ownerId && d.envOwner === env) return d.ownerId;
+  return env || null;
+}
+function setOwner(client, id) {
+  saveData({ ownerId: id, envOwner: envOwnerId() });
+  scheduleRefresh(client, 500);
+}
+
 // ---------- Penyimpanan ID pesan panel ----------
 function loadData() {
   try {
@@ -39,8 +56,9 @@ function loadData() {
     return {};
   }
 }
-function saveData(data) {
+function saveData(patch) {
   try {
+    const data = { ...loadData(), ...patch };
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
   } catch (err) {
@@ -90,14 +108,11 @@ function buildPanel(channel) {
     .setColor(locked ? 0xed4245 : 0x57f287)
     .setTitle('🎛️ Voice Control Panel')
     .setDescription(
-      [
-        `Kelola voice <#${channel.id}> lewat tombol di bawah.`,
-        cfg.requireInVoice ? '_Kamu harus sedang berada di voice tersebut untuk memakai panel._' : '',
-      ]
-        .filter(Boolean)
-        .join('\n'),
+      `Kelola voice <#${channel.id}> lewat tombol di bawah.\n` +
+        '_Hanya owner 👑 yang bisa memakai panel ini._',
     )
     .addFields(
+      { name: '👑 Owner', value: getOwnerId() ? `<@${getOwnerId()}>` : '_Belum diatur_' },
       { name: '📛 Nama', value: channel.name, inline: true },
       { name: 'Status', value: locked ? '🔒 Terkunci' : '🔓 Terbuka', inline: true },
       { name: '👥 Di dalam', value: `${humans} member`, inline: true },
@@ -122,9 +137,48 @@ function buildPanel(channel) {
       .setEmoji('🔓')
       .setStyle(ButtonStyle.Success)
       .setDisabled(!locked),
+    new ButtonBuilder()
+      .setCustomId('vp:transfer')
+      .setLabel('Transfer Owner')
+      .setEmoji('👑')
+      .setStyle(ButtonStyle.Secondary),
   );
 
   return { embeds: [embed], components: [row] };
+}
+
+function buildTransferMenu() {
+  return {
+    content:
+      '**👑 Transfer Owner**\nPilih member yang akan jadi owner baru. ' +
+      '**Setelah dipindah, kamu tidak bisa memakai panel lagi.**',
+    components: [
+      new ActionRowBuilder().addComponents(
+        new UserSelectMenuBuilder()
+          .setCustomId('vp:sel:transfer')
+          .setPlaceholder('Pilih owner baru')
+          .setMinValues(1)
+          .setMaxValues(1),
+      ),
+    ],
+    flags: MessageFlags.Ephemeral,
+  };
+}
+
+async function handleTransfer(interaction) {
+  const targetId = interaction.values[0];
+  const user = interaction.users.get(targetId);
+
+  if (user?.bot) {
+    return interaction.reply({ content: '❌ Bot tidak bisa jadi owner.', flags: MessageFlags.Ephemeral });
+  }
+  if (targetId === getOwnerId()) {
+    return interaction.reply({ content: `ℹ️ <@${targetId}> sudah jadi owner.`, flags: MessageFlags.Ephemeral });
+  }
+
+  setOwner(interaction.client, targetId);
+  console.log(`👑 ${interaction.user.tag} transfer owner panel ke ${user?.tag || targetId}`);
+  return interaction.reply({ content: `👑 Owner panel sekarang <@${targetId}>.`, flags: MessageFlags.Ephemeral });
 }
 
 function buildUsersMenu() {
@@ -228,16 +282,10 @@ async function ensurePanel(client) {
 
 // ---------- Cek hak akses pemakai panel ----------
 function checkAccess(interaction) {
-  const member = interaction.member;
-  if (isStaff(member)) return null;
-
-  if (cfg.panelRoleId && !member.roles.cache.has(cfg.panelRoleId)) {
-    return `❌ Kamu butuh role <@&${cfg.panelRoleId}> untuk memakai panel ini.`;
-  }
-  if (cfg.requireInVoice && member.voice?.channelId !== cfg.voiceChannelId) {
-    return `❌ Kamu harus join <#${cfg.voiceChannelId}> dulu untuk memakai panel ini.`;
-  }
-  return null;
+  const owner = getOwnerId();
+  if (!owner) return '❌ Owner panel belum diatur. Isi `PANEL_OWNER_ID` di file .env bot.';
+  if (interaction.user.id === owner) return null;
+  return `❌ Hanya owner (<@${owner}>) yang bisa memakai panel ini.`;
 }
 
 function reasonOf(interaction, action) {
@@ -385,8 +433,11 @@ async function handleUserSelect(interaction, action) {
 // ---------- Router interaction ----------
 async function onInteraction(interaction) {
   try {
-    // Slash command /voicepanel (admin) -> kirim panel ke channel ini
+    // Slash command /voicepanel (owner / admin server) -> kirim panel ke channel ini
     if (interaction.isChatInputCommand() && interaction.commandName === 'voicepanel') {
+      if (interaction.user.id !== getOwnerId() && !isStaff(interaction.member)) {
+        return interaction.reply({ content: '❌ Hanya owner yang bisa mengirim panel.', flags: MessageFlags.Ephemeral });
+      }
       if (!interaction.channel?.isTextBased()) {
         return interaction.reply({ content: '❌ Jalankan di channel teks.', flags: MessageFlags.Ephemeral });
       }
@@ -407,12 +458,14 @@ async function onInteraction(interaction) {
       if (id === 'vp:users') return interaction.reply(buildUsersMenu());
       if (id === 'vp:lock') return handleLock(interaction, true);
       if (id === 'vp:unlock') return handleLock(interaction, false);
+      if (id === 'vp:transfer') return interaction.reply(buildTransferMenu());
     }
     if (interaction.isModalSubmit() && id === 'vp:modal:rename') return handleRenameSubmit(interaction);
     if (interaction.isUserSelectMenu()) {
       if (id === 'vp:sel:permit') return handleUserSelect(interaction, 'permit');
       if (id === 'vp:sel:block') return handleUserSelect(interaction, 'block');
       if (id === 'vp:sel:reset') return handleUserSelect(interaction, 'reset');
+      if (id === 'vp:sel:transfer') return handleTransfer(interaction);
     }
   } catch (err) {
     console.error('⚠️  Error di voice panel:', err);
@@ -430,8 +483,9 @@ function setupPanel(client, options) {
 
   // Update jumlah member di panel saat ada yang join/leave voice
   client.on('voiceStateUpdate', (oldState, newState) => {
+    if (oldState.channelId === newState.channelId) return;
     if (oldState.channelId === cfg.voiceChannelId || newState.channelId === cfg.voiceChannelId) {
-      if (oldState.channelId !== newState.channelId) scheduleRefresh(client, 5000);
+      scheduleRefresh(client, 5000);
     }
   });
 
@@ -447,7 +501,6 @@ function setupPanel(client, options) {
         new SlashCommandBuilder()
           .setName('voicepanel')
           .setDescription('Kirim panel kontrol voice lofi radio ke channel ini')
-          .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
           .setDMPermission(false)
           .toJSON(),
       ]);
@@ -455,6 +508,7 @@ function setupPanel(client, options) {
     } catch (err) {
       console.error('⚠️  Gagal mendaftarkan slash command:', err.message);
     }
+    if (!getOwnerId()) console.warn('⚠️  PANEL_OWNER_ID belum diisi di .env — panel tidak bisa dipakai siapa pun.');
     await ensurePanel(client);
   });
 }
