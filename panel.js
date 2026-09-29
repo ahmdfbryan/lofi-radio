@@ -85,66 +85,52 @@ function isStaff(member) {
   );
 }
 
-function listOverwrites(channel, type) {
-  // type: 'allow' | 'deny'
-  return channel.permissionOverwrites.cache
-    .filter((ow) => ow.type === OverwriteType.Member && ow[type].has(PermissionFlagsBits.Connect))
-    .filter((ow) => ow.id !== channel.client.user.id)
-    .map((ow) => `<@${ow.id}>`);
-}
-
-function shortList(arr, max = 15) {
-  if (!arr.length) return '_Tidak ada_';
-  const shown = arr.slice(0, max).join(', ');
-  return arr.length > max ? `${shown} … (+${arr.length - max})` : shown;
+function countOverwrites(channel, type) {
+  // type: 'allow' (diizinkan) | 'deny' (diblokir)
+  return channel.permissionOverwrites.cache.filter(
+    (ow) =>
+      ow.type === OverwriteType.Member &&
+      ow.id !== channel.client.user.id &&
+      ow[type].has(PermissionFlagsBits.Connect),
+  ).size;
 }
 
 // ---------- Tampilan panel ----------
-function buildPanel(channel) {
+async function buildPanel(channel) {
   const locked = isLocked(channel);
   const humans = channel.members.filter((m) => !m.user.bot).size;
+  const ownerId = getOwnerId();
+  const owner = ownerId ? await channel.client.users.fetch(ownerId).catch(() => null) : null;
+  const code = (v) => `\`${String(v).replace(/`/g, "'")}\``;
 
   const embed = new EmbedBuilder()
     .setColor(locked ? 0xed4245 : 0x57f287)
     .setTitle('🎛️ Voice Control Panel')
-    .setDescription(
-      `Kelola voice <#${channel.id}> lewat tombol di bawah.\n` +
-        '_Hanya owner 👑 yang bisa memakai panel ini._',
-    )
     .addFields(
-      { name: '👑 Owner', value: getOwnerId() ? `<@${getOwnerId()}>` : '_Belum diatur_' },
-      { name: '📛 Nama', value: channel.name, inline: true },
-      { name: 'Status', value: locked ? '🔒 Terkunci' : '🔓 Terbuka', inline: true },
-      { name: '👥 Di dalam', value: `${humans} member`, inline: true },
-      { name: '✅ Diizinkan', value: shortList(listOverwrites(channel, 'allow')) },
-      { name: '⛔ Diblokir', value: shortList(listOverwrites(channel, 'deny')) },
-    )
-    .setFooter({ text: 'Lofi Radio • Voice Panel' })
-    .setTimestamp();
+      // Baris 1
+      { name: '📛 Nama', value: code(channel.name), inline: true },
+      { name: '👑 Owner', value: code(owner ? owner.username : ownerId || '-'), inline: true },
+      { name: '🔐 Status', value: code(locked ? 'Terkunci' : 'Terbuka'), inline: true },
+      // Baris 2
+      { name: '👥 Member', value: code(humans), inline: true },
+      { name: '✅ Diizinkan', value: code(countOverwrites(channel, 'allow')), inline: true },
+      { name: '⛔ Diblokir', value: code(countOverwrites(channel, 'deny')), inline: true },
+    );
 
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('vp:rename').setLabel('Rename').setEmoji('✏️').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('vp:users').setLabel('Manage Users').setEmoji('👥').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId('vp:lock')
-      .setLabel('Lock')
-      .setEmoji('🔒')
-      .setStyle(ButtonStyle.Danger)
-      .setDisabled(locked),
-    new ButtonBuilder()
-      .setCustomId('vp:unlock')
-      .setLabel('Unlock')
-      .setEmoji('🔓')
-      .setStyle(ButtonStyle.Success)
-      .setDisabled(!locked),
-    new ButtonBuilder()
-      .setCustomId('vp:transfer')
-      .setLabel('Transfer Owner')
-      .setEmoji('👑')
-      .setStyle(ButtonStyle.Secondary),
+  const btn = (id, label, emoji, style, disabled = false) =>
+    new ButtonBuilder().setCustomId(id).setLabel(label).setEmoji(emoji).setStyle(style).setDisabled(disabled);
+
+  const row1 = new ActionRowBuilder().addComponents(
+    btn('vp:rename', 'Rename', '✏️', ButtonStyle.Primary),
+    btn('vp:lock', 'Lock', '🔒', ButtonStyle.Danger, locked),
+    btn('vp:unlock', 'Unlock', '🔓', ButtonStyle.Success, !locked),
+  );
+  const row2 = new ActionRowBuilder().addComponents(
+    btn('vp:users', 'Manage Users', '👥', ButtonStyle.Secondary),
+    btn('vp:transfer', 'Transfer Owner', '👑', ButtonStyle.Secondary),
   );
 
-  return { embeds: [embed], components: [row] };
+  return { embeds: [embed], components: [row1, row2] };
 }
 
 function buildTransferMenu() {
@@ -221,7 +207,7 @@ async function refreshPanel(client) {
     const voice = await getVoiceChannel(client);
     const panelChannel = await client.channels.fetch(data.channelId);
     const msg = await panelChannel.messages.fetch(data.messageId);
-    await msg.edit(buildPanel(voice));
+    await msg.edit(await buildPanel(voice));
   } catch (err) {
     console.warn('⚠️  Tidak bisa memperbarui panel:', err.message);
   }
@@ -245,7 +231,7 @@ async function sendPanel(client, targetChannel) {
     } catch (_) {}
   }
 
-  const msg = await targetChannel.send(buildPanel(voice));
+  const msg = await targetChannel.send(await buildPanel(voice));
   saveData({ channelId: targetChannel.id, messageId: msg.id });
   return msg;
 }
