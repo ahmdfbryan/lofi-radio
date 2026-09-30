@@ -96,8 +96,7 @@ async function buildPanel(channel) {
     .setColor(locked ? 0xed4245 : 0x57f287)
     .setTitle('🎛️ Voice Control Panel')
     .setDescription(
-      `Kelola voice <#${channel.id}> lewat tombol di bawah.\n` +
-        '_Hanya owner 👑 dan staff yang bisa memakai panel ini._',
+      `Kelola voice <#${channel.id}> lewat tombol di bawah.`,
     )
     .addFields(
       { name: '📛 Nama', value: code(channel.name), inline: true },
