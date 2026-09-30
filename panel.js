@@ -1,7 +1,7 @@
 // ============================================================
 //  Voice Control Panel
-//  Panel tombol agar member bisa: Rename, Manage Users,
-//  Lock & Unlock voice channel tempat bot standby.
+//  Panel tombol: Rename, Status, Lock, Unlock, Manage,
+//  Transfer Owner untuk voice channel tempat bot standby.
 // ============================================================
 const fs = require('fs');
 const path = require('path');
@@ -103,20 +103,19 @@ async function buildPanel(channel) {
       { name: '📛 Nama', value: code(channel.name), inline: true },
       { name: '👑 Owner', value: code(owner ? owner.username : ownerId || '-'), inline: true },
       { name: '🔐 Status', value: code(locked ? 'Terkunci' : 'Terbuka'), inline: true },
-    )
-    .setFooter({ text: 'Lofi Radio • Voice Panel' })
-    .setTimestamp();
+    );
 
   const btn = (id, label, emoji, style, disabled = false) =>
     new ButtonBuilder().setCustomId(id).setLabel(label).setEmoji(emoji).setStyle(style).setDisabled(disabled);
 
   const row1 = new ActionRowBuilder().addComponents(
     btn('vp:rename', 'Rename', '✏️', ButtonStyle.Primary),
+    btn('vp:status', 'Status', '💬', ButtonStyle.Primary),
     btn('vp:lock', 'Lock', '🔒', ButtonStyle.Danger, locked),
     btn('vp:unlock', 'Unlock', '🔓', ButtonStyle.Success, !locked),
   );
   const row2 = new ActionRowBuilder().addComponents(
-    btn('vp:users', 'Manage Users', '👥', ButtonStyle.Secondary),
+    btn('vp:users', 'Manage', '👥', ButtonStyle.Secondary),
     btn('vp:transfer', 'Transfer Owner', '👑', ButtonStyle.Secondary),
   );
 
@@ -176,7 +175,7 @@ function buildUsersMenu() {
 
   return {
     content:
-      '**👥 Manage Users**\n' +
+      '**👥 Manage**\n' +
       '• **Izinkan** — user tetap bisa masuk walau voice dikunci.\n' +
       '• **Blokir** — user tidak bisa masuk & langsung dikeluarkan kalau sedang di voice.\n' +
       '• **Hapus** — kembalikan user ke pengaturan normal.',
@@ -351,6 +350,39 @@ async function handleRenameSubmit(interaction) {
   }
 }
 
+// ---------- Status voice (teks kecil di bawah nama voice) ----------
+// Endpoint: PUT /channels/{id}/voice-status. Bot harus sedang berada di voice tsb.
+async function handleStatus(interaction) {
+  const current = loadData().voiceStatus || '';
+  const modal = new ModalBuilder().setCustomId('vp:modal:status').setTitle('Status Voice');
+  const input = new TextInputBuilder()
+    .setCustomId('status')
+    .setLabel('Status baru (kosongkan untuk menghapus)')
+    .setStyle(TextInputStyle.Short)
+    .setMaxLength(500)
+    .setRequired(false);
+  if (current) input.setValue(current.slice(0, 500));
+  modal.addComponents(new ActionRowBuilder().addComponents(input));
+  return interaction.showModal(modal);
+}
+
+async function handleStatusSubmit(interaction) {
+  const status = interaction.fields.getTextInputValue('status').trim();
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  try {
+    await interaction.client.rest.put(`/channels/${cfg.voiceChannelId}/voice-status`, {
+      body: { status },
+      reason: reasonOf(interaction, 'ubah status'),
+    });
+    saveData({ voiceStatus: status });
+    console.log(`💬 ${interaction.user.tag} ubah status voice: "${status}"`);
+    await interaction.editReply(status ? `✅ Status voice diubah: \`${status}\`` : '✅ Status voice dihapus.');
+  } catch (err) {
+    console.error('Ubah status gagal:', err);
+    await interaction.editReply(`❌ Gagal ubah status: ${err.message}`);
+  }
+}
+
 async function handleLock(interaction, lock) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const voice = await getVoiceChannel(interaction.client);
@@ -369,7 +401,7 @@ async function handleLock(interaction, lock) {
     await voice.permissionOverwrites.edit(everyone, { Connect: false }, { reason: reasonOf(interaction, 'lock') });
     console.log(`🔒 ${interaction.user.tag} mengunci voice`);
     await interaction.editReply(
-      '🔒 Voice **dikunci**. Member yang sedang di dalam otomatis diizinkan; gunakan **Manage Users** untuk mengizinkan orang lain.',
+      '🔒 Voice **dikunci**. Member yang sedang di dalam otomatis diizinkan; gunakan **Manage** untuk mengizinkan orang lain.',
     );
   } else {
     await voice.permissionOverwrites.edit(everyone, { Connect: null }, { reason: reasonOf(interaction, 'unlock') });
@@ -462,12 +494,14 @@ async function onInteraction(interaction) {
 
     if (interaction.isButton()) {
       if (id === 'vp:rename') return handleRename(interaction);
+      if (id === 'vp:status') return handleStatus(interaction);
       if (id === 'vp:users') return interaction.reply(buildUsersMenu());
       if (id === 'vp:lock') return handleLock(interaction, true);
       if (id === 'vp:unlock') return handleLock(interaction, false);
       if (id === 'vp:transfer') return interaction.reply(buildTransferMenu());
     }
     if (interaction.isModalSubmit() && id === 'vp:modal:rename') return handleRenameSubmit(interaction);
+    if (interaction.isModalSubmit() && id === 'vp:modal:status') return handleStatusSubmit(interaction);
     if (interaction.isUserSelectMenu()) {
       if (id === 'vp:sel:permit') return handleUserSelect(interaction, 'permit');
       if (id === 'vp:sel:block') return handleUserSelect(interaction, 'block');
@@ -501,6 +535,13 @@ function setupPanel(client, options) {
     if (msg.author.id === client.user.id) return;
     if (msg.channelId !== loadData().channelId) return;
     scheduleSticky(client);
+  });
+
+  // Simpan status voice terbaru (termasuk kalau diubah manual dari Discord)
+  client.on('raw', (packet) => {
+    if (packet.t === 'VOICE_CHANNEL_STATUS_UPDATE' && packet.d?.id === cfg.voiceChannelId) {
+      saveData({ voiceStatus: packet.d.status || '' });
+    }
   });
 
   // Update panel kalau admin mengubah channel langsung dari Discord
