@@ -108,15 +108,16 @@ async function buildPanel(channel) {
   const btn = (id, label, emoji, style, disabled = false) =>
     new ButtonBuilder().setCustomId(id).setLabel(label).setEmoji(emoji).setStyle(style).setDisabled(disabled);
 
+  // 2 baris x 3 tombol: pengaturan di atas, akses di bawah
   const row1 = new ActionRowBuilder().addComponents(
     btn('vp:rename', 'Rename', '✏️', ButtonStyle.Primary),
     btn('vp:status', 'Status', '💬', ButtonStyle.Primary),
-    btn('vp:lock', 'Lock', '🔒', ButtonStyle.Danger, locked),
-    btn('vp:unlock', 'Unlock', '🔓', ButtonStyle.Success, !locked),
+    btn('vp:users', 'Manage', '👥', ButtonStyle.Primary),
   );
   const row2 = new ActionRowBuilder().addComponents(
-    btn('vp:users', 'Manage', '👥', ButtonStyle.Secondary),
-    btn('vp:transfer', 'Transfer Owner', '👑', ButtonStyle.Secondary),
+    btn('vp:lock', 'Lock', '🔒', ButtonStyle.Danger, locked),
+    btn('vp:unlock', 'Unlock', '🔓', ButtonStyle.Success, !locked),
+    btn('vp:transfer', 'Transfer', '👑', ButtonStyle.Secondary),
   );
 
   return { embeds: [embed], components: [row1, row2] };
@@ -125,7 +126,7 @@ async function buildPanel(channel) {
 function buildTransferMenu() {
   return {
     content:
-      '**👑 Transfer Owner**\nPilih member yang akan jadi owner baru. ' +
+      '**👑 Transfer**\nPilih member yang akan jadi owner baru. ' +
       '**Owner lama tidak bisa memakai panel lagi** (kecuali staff).',
     components: [
       new ActionRowBuilder().addComponents(
